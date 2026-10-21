@@ -106,3 +106,63 @@ def save_cbom(
         json.dump(cbom, output_file, indent=2)
 
     print(f"CBOM written to: {path}")
+
+def generate_policy(
+    cbom: dict[str, Any],
+    output_path: str = "../../generated/config.yaml",
+) -> None:
+    """
+    Generate a crypto-agility policy from the CBOM.
+
+    The policy instructs the future C++ shim to use
+    a PQC-hybrid configuration when quantum-vulnerable
+    public-key cryptography is discovered.
+    """
+
+    quantum_vulnerable = cbom["summary"]["quantum_vulnerable"]
+
+    if quantum_vulnerable > 0:
+        crypto_mode = "PQC_HYBRID"
+    else:
+        crypto_mode = "CLASSICAL"
+
+    policy = {
+        "version": 1,
+        "crypto_mode": crypto_mode,
+        "pqc": {
+            "algorithm": "ML-KEM-768",
+        },
+        "classical": {
+            "enabled": True,
+            "fallback": True,
+        },
+        "policy": {
+            "RSA": {
+                "action": "migrate",
+                "replacement": "ML-KEM-768",
+            },
+            "ECC": {
+                "action": "migrate",
+                "replacement": "ML-KEM-768",
+            },
+        },
+    }
+
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        import yaml
+    except ImportError:
+        raise RuntimeError(
+            "PyYAML is required. Run: pip install pyyaml"
+        )
+
+    with path.open("w", encoding="utf-8") as output_file:
+        yaml.safe_dump(
+            policy,
+            output_file,
+            sort_keys=False,
+        )
+
+    print(f"Policy written to: {path}")
