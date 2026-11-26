@@ -1,12 +1,30 @@
+
 import json
-from dataclasses import asdict
+import yaml
+
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from app.scanner.python_ast import CryptoFinding
-from app.risk.scoring import RiskInput, calculate_risk, classify_risk
+from app.risk.scoring import (
+    RiskInput,
+    calculate_risk,
+    classify_risk,
+)
 
+
+# --------------------------------------------------------------
+# Project output directory
+# --------------------------------------------------------------
+
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+GENERATED_DIR = PROJECT_ROOT / "generated"
+
+
+# --------------------------------------------------------------
+# Algorithm weighting
+# --------------------------------------------------------------
 
 def get_algorithm_weight(finding: CryptoFinding) -> float:
     """
@@ -18,6 +36,7 @@ def get_algorithm_weight(finding: CryptoFinding) -> float:
 
     if finding.primitive == "RSA":
         if finding.key_size is not None:
+
             if finding.key_size <= 2048:
                 return 2.0
 
@@ -34,18 +53,24 @@ def get_algorithm_weight(finding: CryptoFinding) -> float:
     return 1.0
 
 
+# --------------------------------------------------------------
+# CBOM creation
+# --------------------------------------------------------------
+
 def create_cbom(
     findings: list[CryptoFinding],
     data_value: float = 10.0,
     exposure_weight: float = 1.5,
 ) -> dict[str, Any]:
     """
-    Convert scanner findings into a CBOM document.
+    Convert scanner findings into a Cryptography
+    Bill of Materials (CBOM).
     """
 
     components = []
 
     for finding in findings:
+
         algorithm_weight = get_algorithm_weight(finding)
 
         risk_input = RiskInput(
@@ -84,44 +109,61 @@ def create_cbom(
         "summary": {
             "total_findings": len(findings),
             "quantum_vulnerable": sum(
-                finding.quantum_vulnerable for finding in findings
+                finding.quantum_vulnerable
+                for finding in findings
             ),
         },
         "components": components,
     }
 
 
+# --------------------------------------------------------------
+# Save CBOM as JSON
+# --------------------------------------------------------------
+
 def save_cbom(
     cbom: dict[str, Any],
-    output_path: str = "../../generated/cbom.json",
+    output_path: str | Path = GENERATED_DIR / "cbom.json",
 ) -> None:
     """
-    Save the CBOM as formatted JSON.
+    Save the CBOM as a formatted JSON file.
     """
 
     path = Path(output_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+
+    path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
     with path.open("w", encoding="utf-8") as output_file:
-        json.dump(cbom, output_file, indent=2)
+
+        json.dump(
+            cbom,
+            output_file,
+            indent=2,
+        )
 
     print(f"CBOM written to: {path}")
 
-def generate_policy(
+
+# --------------------------------------------------------------
+# Crypto-agility policy creation
+# --------------------------------------------------------------
+
+def create_policy(
     cbom: dict[str, Any],
-    output_path: str = "../../generated/config.yaml",
-) -> None:
+) -> dict[str, Any]:
     """
-    Generate a crypto-agility policy from the CBOM.
+    Create a crypto-agility policy from CBOM findings.
 
-    The policy instructs the future C++ shim to use
-    a PQC-hybrid configuration when quantum-vulnerable
-    public-key cryptography is discovered.
+    This function returns a policy dictionary without
+    writing anything to disk.
     """
 
-    quantum_vulnerable = cbom["summary"]["quantum_vulnerable"]
+    vulnerable_count = cbom["summary"]["quantum_vulnerable"]
 
-    if quantum_vulnerable > 0:
+    if vulnerable_count > 0:
         crypto_mode = "PQC_HYBRID"
     else:
         crypto_mode = "CLASSICAL"
@@ -129,36 +171,58 @@ def generate_policy(
     policy = {
         "version": 1,
         "crypto_mode": crypto_mode,
+
         "pqc": {
             "algorithm": "ML-KEM-768",
         },
+
         "classical": {
             "enabled": True,
-            "fallback": True,
+            "fallback": False,
         },
+
         "policy": {
             "RSA": {
-                "action": "migrate",
-                "replacement": "ML-KEM-768",
+                "action": "review_and_migrate",
+                "key_establishment": "ML-KEM-768",
+                "signature": "ML-DSA",
             },
+
             "ECC": {
-                "action": "migrate",
-                "replacement": "ML-KEM-768",
+                "action": "review_and_migrate",
+                "key_establishment": "ML-KEM-768",
+                "signature": "ML-DSA",
             },
         },
     }
 
-    path = Path(output_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    return policy
 
-    try:
-        import yaml
-    except ImportError:
-        raise RuntimeError(
-            "PyYAML is required. Run: pip install pyyaml"
-        )
+
+# --------------------------------------------------------------
+# Save crypto-agility policy as YAML
+# --------------------------------------------------------------
+
+def generate_policy(
+    cbom: dict[str, Any],
+    output_path: str | Path = GENERATED_DIR / "config.yaml",
+) -> None:
+    """
+    Generate a crypto-agility policy and save it
+    as a YAML configuration file.
+    """
+
+    policy = create_policy(cbom)
+
+    path = Path(output_path)
+
+    path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
     with path.open("w", encoding="utf-8") as output_file:
+
         yaml.safe_dump(
             policy,
             output_file,
